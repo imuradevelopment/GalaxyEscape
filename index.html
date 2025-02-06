@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Galaxy Escape - モバイル向け重力迷路ゲーム</title>
+  <style>
+    /* --------------------------------------------------------------------------
+       全体のスタイル定義
+
+       - 基本背景はラジアルグラデーションで宇宙っぽい雰囲気を演出
+       - ボタン、スコア表示、ゲームオーバー表示など各種UIをスタイリッシュに
+       - プログレスバー(進捗バー)や難易度通知、ボーナス表示(ポップアップ)の演出
+         も一括でここに定義している
+    -------------------------------------------------------------------------- */
+
+    :root {
+      --primary-color: #4CAF50;
+      --secondary-color: #2196F3;
+      --danger-color: #F44336;
+      --text-color: rgba(255,255,255,0.9);
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: radial-gradient(circle at center, #1a1a1a, #000);
+      overflow: hidden;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    /* ゲーム描画用キャンバス */
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at 50% 100%, #2a2a2a, #1a1a1a);
+    }
+
+    /* 開始/リセット ボタン */
+    #startButton {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 15px 40px;
+      font-size: 1.2em;
+      cursor: pointer;
+      z-index: 10;
+      background: linear-gradient(145deg, var(--primary-color), #45a049);
+      color: var(--text-color);
+      border: none;
+      border-radius: 30px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      transition: all 0.3s ease;
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+
+    #startButton:hover {
+      transform: translateX(-50%) scale(1.05);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    }
+
+    /* スコア表示 */
+    #scoreDisplay {
+      position: fixed;
+      top: 25px;
+      left: 25px;
+      color: var(--text-color);
+      font-size: 1.8em;
+      z-index: 10;
+      background: rgba(0,0,0,0.6);
+      padding: 12px 25px;
+      border-radius: 15px;
+      backdrop-filter: blur(5px);
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+
+    /* ゲームオーバー表示 */
+    #gameOverDisplay {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: var(--danger-color);
+      font-size: 3.5em;
+      text-align: center;
+      z-index: 20;
+      display: none;
+      text-shadow: 0 4px 10px rgba(244,67,54,0.3);
+      background: rgba(0,0,0,0.8);
+      padding: 30px 50px;
+      border-radius: 20px;
+      border: 2px solid var(--danger-color);
+    }
+
+    /* プログレスバー（スコアの進捗を可視化） */
+    #progressBar {
+      position: fixed;
+      top: 25px;
+      right: 25px;
+      width: 200px;
+      height: 12px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 6px;
+      overflow: hidden;
+      display: none;
+    }
+    #progressFill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+      transition: width 0.3s ease;
+    }
+
+    /* 難易度アップ時の通知 */
+    .difficulty-notice {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.9);
+      color: var(--text-color);
+      padding: 15px 30px;
+      border-radius: 10px;
+      font-size: 1.4em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+      border: 1px solid var(--primary-color);
+      box-shadow: 0 0 20px rgba(76,175,80,0.3);
+    }
+
+    /* ボーナス獲得時のポップアップ演出 */
+    .bonus-popup {
+      position: absolute;
+      color: #4CAF50;
+      font-weight: bold;
+      font-size: 1.2em;
+      animation: floatUp 1s ease-out forwards;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    @keyframes floatUp {
+      0% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-50px); }
+    }
+  </style>
+</head>
+<body>
+  <!-- 
+    ----------------------------------------------------------------------------
+    【コード全体のロジック概要（なるべく詳しく）】
+
+    1. HTML/CSSによるUI構成
+       - Canvas(#gameCanvas)上でゲーム描画を行う。スタイリッシュな背景/ネオン風壁＆ボール。
+       - 「開始/リセット」ボタン(#startButton)でゲームを初期化＆再スタートする仕組み。
+       - スコア表示(#scoreDisplay)やゲームオーバー表示(#gameOverDisplay)に加え、
+         プログレスバー(#progressBar)や難易度通知(.difficulty-notice)を用意してゲーム演出を強化。
+
+    2. JavaScript全体の流れ
+       - ページ読み込み後、リサイズイベントでCanvasサイズを画面に合わせる。
+       - 開始ボタン押下で「ゲーム初期化 → requestAnimationFrame(loop)」の流れでゲーム開始。
+       - センサー（deviceorientation）からBeta/Gammaの傾きを取得し、サブステップ方式でボールを移動。
+         すり抜けや急激な移動を防ぐため、1フレームの移動を複数回に分割して衝突判定。
+       - 壁は一定間隔で上端から生成、下方向へ移動。ボールと衝突したら減点＆押し出し。
+         最終的に隙間を抜けられればボーナスを加点。
+       - スコアが1000点刻みで上昇するたびに難易度アップ（壁速度・衝突ペナルティ増、隙間狭小化）。
+       - ゲームオーバー条件：スコアがマイナス or ボールが画面下部に到達。
+       - ゲームオーバー時は表示を出し、タップで再スタートが可能。
+
+    3. サブステップ式衝突対策
+       - 1フレームの移動量をsteps回(例：4回)に分けて、毎回衝突判定と押し出し処理を行う。
+       - 急激な傾きでも壁にめり込んだりすり抜けたりしにくくなる。
+
+    4. 衝突→ボーナス獲得ロジック
+       - 衝突しても「壁.processed = true;」にはせず、ボーナスは「壁がボールを追い越した瞬間 &
+         衝突していない状態」で加算。
+       - 一度衝突しても、最終的に通り抜けられればスコアをもらえる仕組み。
+
+    5. 難易度アップ & プログレスバー
+       - スコアが(nextMilestone=1000,2000,...)を超えるたびに難易度アップ。
+         壁速度UP, 隙間幅DOWN, 衝突ペナルティUP。
+       - プログレスバーは「(score % 1000)/1000」で表示し、次の難易度アップまでの進捗を演出。
+
+    6. 視覚エフェクト
+       - drawBackgroundEffects()で星をランダムに描画し、宇宙的な雰囲気を出す。
+       - ボール、壁ともネオン風のグラデーション＆shadowBlurでサイバーなビジュアル。
+
+    7. ゲームオーバー時/リセット時
+       - ループをcancelAnimationFrame()で停止 → 変数を初期化 → 再度ループ開始。
+       - 前回の壁速度やスコア状態を引きずらないように、難易度パラメータや配列などを全て初期化。
+
+    ----------------------------------------------------------------------------
+  -->
+
+  <button id="startButton">▶ ゲームスタート</button>
+  <canvas id="gameCanvas"></canvas>
+  <div id="scoreDisplay">SCORE: 0</div>
+  <div id="gameOverDisplay">
+    <div>GAME OVER</div>
+    <div style="font-size: 0.4em; margin-top: 15px; color: rgba(255,255,255,0.8);">
+      タップで再挑戦
+    </div>
+  </div>
+
+  <!-- スコアの進捗を可視化するプログレスバー -->
+  <div id="progressBar"><div id="progressFill"></div></div>
+
+  <!-- 難易度アップ通知 -->
+  <div class="difficulty-notice" id="difficultyNotice">難易度が上がりました！</div>
+
+  <script>
+    // ========== グローバル変数・初期設定 ==========
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const startButton = document.getElementById('startButton');
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    const gameOverDisplay = document.getElementById('gameOverDisplay');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    const difficultyNotice = document.getElementById('difficultyNotice');
+
+    let animationId = null; // requestAnimationFrameのID管理
+
+    // 画面サイズをcanvasに適用
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ボール関連
+    let charX, charY;
+    const radius = 10;
+
+    // センサー関連
+    let currentBeta = 0, currentGamma = 0;
+    let smoothBeta = 0, smoothGamma = 0;
+    const smoothingFactor = 0.1;
+    let baseBeta = 0, baseGamma = 0;
+
+    // ゲーム状態
+    let gameStarted = false;
+    let gameOver = false;
+
+    // スコア・難易度関連
+    let score = 100;
+    let nextMilestone = 1000; // 1000点ごとに難易度UP
+    let baseWallSpeed = 2;    // 壁の速度
+    let baseGapWidth = 100;   // 壁の隙間幅
+    let baseCollisionPenalty = 10; // 衝突時の減点
+    const pushForce = 5;      // 衝突時にボールを下へ押す
+
+    // 壁関連
+    let walls = [];
+    const wallThickness = 20;
+    let wallTimer = 0;
+    const wallInterval = 150;
+
+    // iOS向けセンサー許可（必要に応じて）
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      document.body.addEventListener('click', async () => {
+        try {
+          const response = await DeviceMotionEvent.requestPermission();
+          if (response === 'granted') {
+            console.log('センサーアクセス許可');
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, { once: true });
+    }
+
+    // デバイスの傾き取得
+    window.addEventListener('deviceorientation', (event) => {
+      currentBeta = event.beta;
+      currentGamma = event.gamma;
+    }, true);
+
+    // ========== 開始/リセット ボタン ==========
+    startButton.addEventListener('click', () => {
+      // 既存のループが動いているなら停止
+      if (animationId != null) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+      }
+      // ゲーム変数を初期化
+      resetGame();
+      // 新しいループ開始
+      animationId = requestAnimationFrame(loop);
+    });
+
+    // ========== リセット処理 ==========
+    function resetGame() {
+      score = 100;
+      nextMilestone = 1000;
+
+      baseWallSpeed = 2;
+      baseGapWidth = 100;
+      baseCollisionPenalty = 10;
+
+      // ボール位置は画面中央
+      charX = canvas.width / 2;
+      charY = canvas.height / 2;
+
+      // 壁配列初期化
+      walls = [];
+      wallTimer = 0;
+
+      // 各種フラグ
+      gameOver = false;
+      gameOverDisplay.style.display = "none";
+
+      // センサー値リセット
+      baseBeta = currentBeta;
+      baseGamma = currentGamma;
+      smoothBeta = currentBeta;
+      smoothGamma = currentGamma;
+
+      gameStarted = true;
+      updateScoreDisplay();
+      updateProgressBar();
+    }
+
+    // ========== 衝突判定関数 ==========
+    function isBallCollidingWithWall(wall) {
+      return (
+        (charY + radius > wall.y && charY - radius < wall.y + wall.thickness) &&
+        (charX - radius < wall.gapX || charX + radius > wall.gapX + wall.gapWidth)
+      );
+    }
+
+    // ========== 壁生成 ==========
+    function createWall() {
+      const margin = 50;
+      // 隙間のx座標を乱数で決定
+      const gapX = Math.random() * (canvas.width - baseGapWidth - 2*margin) + margin;
+      return {
+        y: -wallThickness,
+        gapX: gapX,
+        gapWidth: baseGapWidth,
+        thickness: wallThickness,
+        processed: false, // ボーナス処理済フラグ
+        collided: false   // 衝突済フラグ
+      };
+    }
+
+    // ========== 壁の更新 ==========
+    function updateWalls() {
+      for (let wall of walls) {
+        // 現在の難易度に応じた速度で下方向へ移動
+        wall.y += baseWallSpeed;
+
+        // 衝突判定
+        if (!wall.processed && isBallCollidingWithWall(wall)) {
+          if (!wall.collided) {
+            score -= baseCollisionPenalty;
+            wall.collided = true;
+          }
+          // 衝突中はボールを下に押し出す
+          charY += pushForce;
+        }
+
+        // ボールより下に抜けたタイミングでボーナス（衝突の有無は問わない）
+        if (!wall.processed && wall.y > charY && !isBallCollidingWithWall(wall)) {
+          let bonus = Math.round((canvas.height - charY) / 5);
+          score += bonus;
+          addScoreBonus(bonus, charX, charY);
+          wall.processed = true;
+        }
+      }
+
+      // 画面下に完全に消えた壁を除去
+      walls = walls.filter(w => w.y < canvas.height);
+
+      // 一定フレームごとに新しい壁を生成
+      wallTimer++;
+      if (wallTimer > wallInterval) {
+        walls.push(createWall());
+        wallTimer = 0;
+      }
+    }
+
+    // ========== 難易度アップ判定と通知 ==========
+    function checkDifficultyUp() {
+      if (score >= nextMilestone) {
+        // 難易度アップ通知を表示
+        difficultyNotice.style.opacity = '1';
+        setTimeout(() => {
+          difficultyNotice.style.opacity = '0';
+        }, 1500);
+
+        // 壁速度・隙間幅・衝突ペナルティを更新
+        baseWallSpeed += 1;
+        baseGapWidth -= 10;
+        if (baseGapWidth < 20) baseGapWidth = 20;
+        baseCollisionPenalty += 5;
+
+        // 次の目標スコアを更新
+        nextMilestone += 1000;
+      }
+    }
+
+    // ========== ボールの移動(サブステップ方式) ==========
+    function updateBall() {
+      if (!gameStarted) return;
+
+      // センサー値を平滑化
+      smoothBeta = smoothBeta * (1 - smoothingFactor) + currentBeta * smoothingFactor;
+      smoothGamma = smoothGamma * (1 - smoothingFactor) + currentGamma * smoothingFactor;
+
+      let diffBeta = smoothBeta - baseBeta;
+      let diffGamma = smoothGamma - baseGamma;
+
+      // ノイズレベルを超えない傾きは0とみなす
+      const threshold = 1.0;
+      if (Math.abs(diffBeta) < threshold) diffBeta = 0;
+      if (Math.abs(diffGamma) < threshold) diffGamma = 0;
+
+      // 移動感度
+      const sensitivityX = 0.3;
+      const sensitivityY = 0.15;
+
+      let deltaX = diffGamma * sensitivityX;
+      let deltaY = diffBeta * sensitivityY;
+
+      // 急激な移動を制限
+      const maxDeltaX = 8, maxDeltaY = 5;
+      deltaX = Math.max(Math.min(deltaX, maxDeltaX), -maxDeltaX);
+      deltaY = Math.max(Math.min(deltaY, maxDeltaY), -maxDeltaY);
+
+      // サブステップ回数
+      const steps = 4;
+      const stepX = deltaX / steps;
+      const stepY = deltaY / steps;
+
+      for (let i = 0; i < steps; i++) {
+        charX += stepX;
+        charY += stepY;
+
+        // 画面端クランプ
+        if (charX < radius) charX = radius;
+        if (charX > canvas.width - radius) charX = canvas.width - radius;
+        if (charY < radius) charY = radius;
+        if (charY > canvas.height - radius) charY = canvas.height - radius;
+
+        // 衝突チェック(サブステップごと)
+        for (let wall of walls) {
+          if (!wall.processed && isBallCollidingWithWall(wall)) {
+            if (!wall.collided) {
+              score -= baseCollisionPenalty;
+              wall.collided = true;
+            }
+            // 衝突中はボールを下に押し出し
+            charY += pushForce;
+            // 再度画面下端を超えないように
+            if (charY > canvas.height - radius) {
+              charY = canvas.height - radius;
+            }
+          }
+        }
+      }
+    }
+
+    // ========== スコア表示の更新 ==========
+    function updateScoreDisplay() {
+      scoreDisplay.textContent = `SCORE: ${score}`;
+    }
+
+    // ========== ボーナス演出 ==========
+    function addScoreBonus(bonus, x, y) {
+      // ボーナス値をポップアップ表示
+      const popup = document.createElement('div');
+      popup.className = 'bonus-popup';
+      popup.textContent = `+${bonus}`;
+      // 表示位置を画面上に変換
+      popup.style.left = `${x}px`;
+      popup.style.top = `${y}px`;
+      document.body.appendChild(popup);
+
+      // 1秒後に自動削除
+      setTimeout(() => popup.remove(), 1000);
+    }
+
+    // ========== ゲームオーバー判定 ==========
+    function checkGameOver() {
+      if (score < 0 || charY + radius >= canvas.height) {
+        gameOver = true;
+        gameOverDisplay.style.display = "block";
+        progressBar.style.display = 'none';
+
+        // ゲームオーバー演出(赤い影)
+        ctx.shadowColor = 'rgba(244,67,54,0.5)';
+        ctx.shadowBlur = 50;
+        ctx.fillStyle = 'rgba(244,67,54,0.2)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    // ========== 背景エフェクト(星のきらめき) ==========
+    function drawBackgroundEffects() {
+      // ランダムに小さな星を描く
+      if(Math.random() < 0.05) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.random()*0.3})`;
+        ctx.fillRect(
+          Math.random()*canvas.width,
+          Math.random()*canvas.height,
+          1.5, 1.5
+        );
+      }
+    }
+
+    // ========== プログレスバーの更新 ==========
+    function updateProgressBar() {
+      // 次の難易度アップ(1000点ごと)までの進捗を%表示
+      const progress = (score % 1000) / 1000 * 100;
+      progressFill.style.width = `${progress}%`;
+      progressBar.style.display = gameStarted ? 'block' : 'none';
+    }
+
+    // ========== メイン描画処理(ネオンエフェクト) ==========
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 背景に星をちりばめるエフェクト
+      drawBackgroundEffects();
+
+      // ボール描画: ネオングラデーション
+      const gradient = ctx.createRadialGradient(
+        charX, charY, 0,
+        charX, charY, radius*2
+      );
+      gradient.addColorStop(0, 'rgba(76,175,80,1)');
+      gradient.addColorStop(1, 'rgba(76,175,80,0.3)');
+
+      ctx.beginPath();
+      ctx.arc(charX, charY, radius, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.shadowColor = '#4CAF50';
+      ctx.shadowBlur = 15;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // 壁描画: ネオンレッド風
+      walls.forEach(wall => {
+        const wallGradient = ctx.createLinearGradient(0, wall.y, 0, wall.y + wall.thickness);
+        wallGradient.addColorStop(0, '#F44336');
+        wallGradient.addColorStop(1, '#D32F2F');
+
+        ctx.fillStyle = wallGradient;
+        ctx.shadowColor = '#F44336';
+        ctx.shadowBlur = 10;
+        // 左壁
+        ctx.fillRect(0, wall.y, wall.gapX, wall.thickness);
+        // 右壁
+        ctx.fillRect(wall.gapX + wall.gapWidth, wall.y,
+          canvas.width - (wall.gapX + wall.gapWidth), wall.thickness);
+        ctx.shadowBlur = 0;
+      });
+
+      // プログレスバー更新
+      updateProgressBar();
+    }
+
+    // ========== メインループ ==========
+    function loop() {
+      if (!gameOver) {
+        updateBall();        // ボール移動(サブステップ)
+        updateWalls();       // 壁の移動＆衝突・ボーナス処理
+        checkDifficultyUp(); // 難易度上昇判定
+        checkGameOver();     // ゲームオーバー判定
+        updateScoreDisplay();
+        draw();
+
+        animationId = requestAnimationFrame(loop);
+      } else {
+        animationId = null; // ループ停止
+      }
+    }
+
+    // ========== ゲームオーバー画面タップでリスタート ==========
+    gameOverDisplay.addEventListener('click', () => {
+      startButton.click();
+    });
+  </script>
+</body>
+</html>
