@@ -6,15 +6,8 @@
   <!-- ビューポートを端末幅に合わせ、縮尺統一 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 
-  <title>Galaxy Escape - モバイル向け重力迷路ゲーム</title>
+  <title>Galaxy Escape - モバイル向け重力迷路ゲーム (再スタート対応)</title>
   <style>
-    /* --------------------------------------------------------------------------
-       全体のスタイル定義
-       - 画面いっぱいに広がるCanvasと各種UI要素（ボタン、スコア表示、ゲームオーバー表示など）
-       - 全ブラウザ・端末で同様の縮尺・レイアウトになるように
-       - 「▶ ゲームスタート」や「タップで再挑戦」などはユーザの要望に合わせ改行やnowrapを調整
-    -------------------------------------------------------------------------- */
-
     :root {
       --primary-color: #4CAF50;
       --secondary-color: #2196F3;
@@ -41,7 +34,7 @@
 
     /* 開始／リセットボタン（改行なし） */
     #startButton {
-      white-space: nowrap;  /* 「▶ ゲームスタート」は改行しない */
+      white-space: nowrap;
       position: fixed;
       bottom: 30px;
       left: 50%;
@@ -64,26 +57,33 @@
       box-shadow: 0 6px 20px rgba(0,0,0,0.4);
     }
 
-    /* スコア表示 */
-    #scoreDisplay {
+    /* スコアとプログレスバーを中央上部に並べるためのコンテナ */
+    #topContainer {
       position: fixed;
       top: 25px;
-      left: 25px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      z-index: 10;
+    }
+
+    /* スコア表示 */
+    #scoreDisplay {
       color: var(--text-color);
       font-size: 1.8em;
-      z-index: 10;
       background: rgba(0,0,0,0.6);
       padding: 12px 25px;
       border-radius: 15px;
       backdrop-filter: blur(5px);
       border: 1px solid rgba(255,255,255,0.1);
       box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-      white-space: nowrap; /* SCORE: XX などは改行防止 */
+      white-space: nowrap;
     }
 
-    /* ゲームオーバー表示（複数行） */
+    /* ゲームオーバー表示（タップで再挑戦の文言を削除） */
     #gameOverDisplay {
-      /* white-space: nowrap; ← 削除：改行して良い */
       position: fixed;
       top: 50%;
       left: 50%;
@@ -102,15 +102,12 @@
 
     /* プログレスバー（スコアの進捗を可視化） */
     #progressBar {
-      position: fixed;
-      top: 25px;
-      right: 25px;
       width: 200px;
       height: 12px;
       background: rgba(255,255,255,0.1);
       border-radius: 6px;
       overflow: hidden;
-      display: none;
+      display: block;
     }
     #progressFill {
       width: 0%;
@@ -121,7 +118,7 @@
 
     /* 難易度アップ通知（改行なし） */
     .difficulty-notice {
-      white-space: nowrap;  /* 改行なし */
+      white-space: nowrap;
       position: fixed;
       top: 50%;
       left: 50%;
@@ -154,39 +151,69 @@
   </style>
 </head>
 <body>
-  <!-- 
-      ----------------------------------------------------------------------------
-      【ゲーム全体ロジック概要】
-      1. ビューポート固定で、どのブラウザでも同じ縮尺になるように調整
-      2. Canvas(#gameCanvas)でネオン風ボールと壁を描画
-      3. 「▶ ゲームスタート」は改行なし(#startButton)
-      4. ゲームオーバーは複数行(「GAME OVER」と「タップで再挑戦」は別行で)
-      5. 難易度通知は改行なし(.difficulty-notice)
-      6. サブステップ方式の衝突判定で加速度的すり抜けを防ぐ
-      7. 一度衝突しても抜けられればボーナス加算
-      ----------------------------------------------------------------------------
-  -->
-
-  <button id="startButton">▶ ゲームスタート</button>
-  <canvas id="gameCanvas"></canvas>
-  <div id="scoreDisplay">SCORE: 0</div>
-
-  <!-- ゲームオーバー表示(複数行OK) -->
-  <div id="gameOverDisplay">
-    <div>GAME OVER</div>
-    <div style="font-size: 0.3em; margin-top: 15px; color: rgba(255,255,255,0.8);">タップで再挑戦</div>
+  <!-- スコアとプログレスバーをまとめるコンテナ -->
+  <div id="topContainer">
+    <div id="scoreDisplay">SCORE: 0</div>
+    <div id="progressBar"><div id="progressFill"></div></div>
   </div>
 
-  <!-- プログレスバー -->
-  <div id="progressBar"><div id="progressFill"></div></div>
+  <!-- ゲームスタート前はボタンが表示される -->
+  <button id="startButton">▶ ゲームスタート</button>
+  <canvas id="gameCanvas"></canvas>
 
-  <!-- 難易度アップ通知（改行なし） -->
+  <div id="gameOverDisplay">
+    <div>GAME OVER</div>
+  </div>
+
   <div class="difficulty-notice" id="difficultyNotice">難易度が上がりました！</div>
 
   <script>
-    /* 
-      ========= グローバル変数・初期設定 =========
+    /* ===== CONFIG =====
+       ここに各種係数・調整値をまとめています。
+       変更することでゲームバランスを簡単に調整できます。
     */
+    const CONFIG = {
+      // ゲーム初期値
+      initialScore: 100,
+      initialMilestone: 1000,
+      
+      // 壁に関する設定
+      initialWallSpeed: 3,        // 壁の初期速度（ベース値）
+      initialGapWidth: 100,         // 壁のギャップ幅初期値
+      initialCollisionPenalty: 10,  // 衝突時のスコア減少値
+      wallInterval: 150,            // 壁生成のタイマー間隔（単位：擬似フレーム）
+      wallThickness: 20,            // 壁の厚み（ピクセル）
+      wallSpeedMultiplier: 60,      // 壁の移動速度計算用（秒換算係数）
+
+      // 衝突時の押し戻し量
+      pushForce: 5,
+
+      // センサー・玉移動に関する設定
+      smoothingFactor: 0.1,         // センサー値のスムージング係数
+      tiltThreshold: 1.0,           // 微小な傾きを 0 と見なす閾値（度）
+      sensitivityX: 30,             // 横方向の感度
+      sensitivityY: 15,             // 縦方向の感度
+      subSteps: 4,                  // 移動時のサブステップ回数
+
+      // 時間補正
+      maxDeltaTime: 0.05,           // 1フレームあたりの最大経過時間（秒）
+
+      // 難易度アップ時の調整値
+      milestoneIncrement: 1000,     // スコアがこの値ごとに難易度アップ
+      wallSpeedIncrease: 2,         // 難易度アップ時の壁速度増加量
+      gapWidthDecrease: 10,         // 難易度アップ時のギャップ幅減少量
+      minGapWidth: 20,              // ギャップ幅の最小値
+      collisionPenaltyIncrease: 5,  // 難易度アップ時の衝突ペナルティ増加量
+
+      // ボーナス加点
+      bonusFactor: 5,               // ボーナス計算：(canvas.height - charY) / bonusFactor
+
+      // 背景エフェクト
+      starEffectProbability: 0.05,  // 星（背景エフェクト）の描画確率
+      starSize: 1.5                 // 星のサイズ（ピクセル）
+    };
+
+    /* ===== グローバル変数 ===== */
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
@@ -197,7 +224,8 @@
     const progressFill = document.getElementById('progressFill');
     const difficultyNotice = document.getElementById('difficultyNotice');
 
-    let animationId = null; // requestAnimationFrame管理
+    let animationId = null; // requestAnimationFrame 管理
+    let lastTimestamp = 0;  // 前フレームの時刻（時間依存処理用）
 
     // 画面サイズ調整
     function resizeCanvas() {
@@ -207,14 +235,15 @@
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
-    // ボール関連
+    // 玉（キャラクター）関連
     let charX, charY;
     const radius = 10;
 
     // センサー関連
     let currentBeta = 0, currentGamma = 0;
     let smoothBeta = 0, smoothGamma = 0;
-    const smoothingFactor = 0.1;
+
+    // キャリブレーション（ゲーム開始時に現在の傾きを基準として記録）
     let baseBeta = 0, baseGamma = 0;
 
     // ゲーム状態
@@ -222,20 +251,19 @@
     let gameOver = false;
 
     // スコア・難易度
-    let score = 100;
-    let nextMilestone = 1000;
-    let baseWallSpeed = 2;
-    let baseGapWidth = 100;
-    let baseCollisionPenalty = 10;
-    const pushForce = 5;
+    let score = CONFIG.initialScore;
+    let nextMilestone = CONFIG.initialMilestone;
 
-    // 壁関連
+    // 壁関連（初期値）
+    let baseWallSpeed = CONFIG.initialWallSpeed;
+    let baseGapWidth = CONFIG.initialGapWidth;
+    let baseCollisionPenalty = CONFIG.initialCollisionPenalty;
+
+    // 壁生成タイマー
     let walls = [];
-    const wallThickness = 20;
     let wallTimer = 0;
-    const wallInterval = 150;
 
-    // iOS向けセンサー許可(必要時)
+    // iOS向けセンサー許可（必要時）
     if (typeof DeviceMotionEvent.requestPermission === 'function') {
       document.body.addEventListener('click', async () => {
         try {
@@ -249,7 +277,7 @@
       }, { once: true });
     }
 
-    // deviceorientation イベントでBeta/Gamma取得
+    // deviceorientation イベントで Beta/Gamma を取得
     window.addEventListener('deviceorientation', (event) => {
       currentBeta = event.beta;
       currentGamma = event.gamma;
@@ -257,21 +285,21 @@
 
     // ========== 開始／リセット ボタン ==========
     startButton.addEventListener('click', () => {
-      if (animationId !== null) {
-        cancelAnimationFrame(animationId);
-        animationId = null;
-      }
+      // ゲームスタートボタンを押下したら非表示に
+      startButton.style.display = "none";
       resetGame();
-      animationId = requestAnimationFrame(loop);
+      animationId = requestAnimationFrame(gameLoop);
     });
 
-    // ========== 初期化処理 ==========
+    // ========== 初期化処理（キャリブレーション含む） ==========
     function resetGame() {
-      score = 100;
-      nextMilestone = 1000;
-      baseWallSpeed = 2;
-      baseGapWidth = 100;
-      baseCollisionPenalty = 10;
+      score = CONFIG.initialScore;
+      nextMilestone = CONFIG.initialMilestone;
+
+      // 壁のパラメータ再設定
+      baseWallSpeed = CONFIG.initialWallSpeed;
+      baseGapWidth = CONFIG.initialGapWidth;
+      baseCollisionPenalty = CONFIG.initialCollisionPenalty;
 
       charX = canvas.width / 2;
       charY = canvas.height / 2;
@@ -281,7 +309,10 @@
 
       gameOver = false;
       gameOverDisplay.style.display = "none";
+      // プログレスバーは常に表示
+      progressBar.style.display = "block";
 
+      // キャリブレーション：現在のセンサー値を基準として保存
       baseBeta = currentBeta;
       baseGamma = currentGamma;
       smoothBeta = currentBeta;
@@ -290,6 +321,131 @@
       gameStarted = true;
       updateScoreDisplay();
       updateProgressBar();
+
+      lastTimestamp = 0;
+    }
+
+    // ========== メインループ（時間依存） ==========
+    function gameLoop(timestamp) {
+      if (lastTimestamp === 0) {
+        lastTimestamp = timestamp;
+      }
+      const deltaTime = (timestamp - lastTimestamp) / 1000;
+      lastTimestamp = timestamp;
+      // フレームあたりの経過時間を制限
+      const dt = Math.min(deltaTime, CONFIG.maxDeltaTime);
+
+      if (!gameOver) {
+        updateBall(dt);
+        updateWalls(dt);
+        checkDifficultyUp();
+        checkGameOver();
+        updateScoreDisplay();
+        draw();
+        animationId = requestAnimationFrame(gameLoop);
+      } else {
+        animationId = null;
+      }
+    }
+
+    // ========== 玉の移動（時間依存＋サブステップ） ==========
+    function updateBall(dt) {
+      if (!gameStarted) return;
+
+      // センサー値のスムージング
+      smoothBeta = smoothBeta * (1 - CONFIG.smoothingFactor) + currentBeta * CONFIG.smoothingFactor;
+      smoothGamma = smoothGamma * (1 - CONFIG.smoothingFactor) + currentGamma * CONFIG.smoothingFactor;
+
+      let diffBeta = smoothBeta - baseBeta;
+      let diffGamma = smoothGamma - baseGamma;
+
+      // 小さな傾きは閾値未満なら 0 とする
+      if (Math.abs(diffBeta) < CONFIG.tiltThreshold) diffBeta = 0;
+      if (Math.abs(diffGamma) < CONFIG.tiltThreshold) diffGamma = 0;
+
+      // 1フレームあたりの移動量＝傾き × 感度 × 経過時間
+      let totalDeltaX = diffGamma * CONFIG.sensitivityX * dt;
+      let totalDeltaY = diffBeta  * CONFIG.sensitivityY * dt;
+
+      // サブステップで分割して移動（衝突判定の精度向上）
+      const steps = CONFIG.subSteps;
+      const stepX = totalDeltaX / steps;
+      const stepY = totalDeltaY / steps;
+
+      for (let i = 0; i < steps; i++) {
+        charX += stepX;
+        charY += stepY;
+
+        // 画面端でクランプ
+        if (charX < radius) charX = radius;
+        if (charX > canvas.width - radius) charX = canvas.width - radius;
+        if (charY < radius) charY = radius;
+        if (charY > canvas.height - radius) charY = canvas.height - radius;
+
+        // 壁との衝突判定
+        for (let wall of walls) {
+          if (!wall.processed && isBallCollidingWithWall(wall)) {
+            if (!wall.collided) {
+              score -= baseCollisionPenalty;
+              wall.collided = true;
+            }
+            charY += CONFIG.pushForce;
+            if (charY > canvas.height - radius) {
+              charY = canvas.height - radius;
+            }
+          }
+        }
+      }
+    }
+
+    // ========== 壁の生成・更新（時間依存） ==========
+    function updateWalls(dt) {
+      // 1秒あたりの壁の移動距離
+      const wallSpeedPerSec = baseWallSpeed * CONFIG.wallSpeedMultiplier;
+      for (let wall of walls) {
+        wall.y += wallSpeedPerSec * dt;
+
+        // 衝突判定
+        if (!wall.processed && isBallCollidingWithWall(wall)) {
+          if (!wall.collided) {
+            score -= baseCollisionPenalty;
+            wall.collided = true;
+          }
+          charY += CONFIG.pushForce;
+        }
+
+        // ボーナス判定（壁を抜けた瞬間に加点）
+        if (!wall.processed && wall.y > charY && !isBallCollidingWithWall(wall)) {
+          let bonus = Math.round((canvas.height - charY) / CONFIG.bonusFactor);
+          score += bonus;
+          addScoreBonus(bonus, charX, charY);
+          wall.processed = true;
+        }
+      }
+
+      // 画面下に出た壁を削除
+      walls = walls.filter(w => w.y < canvas.height);
+
+      // 壁生成タイマーの更新
+      wallTimer += dt * CONFIG.wallSpeedMultiplier;
+      if (wallTimer > CONFIG.wallInterval) {
+        walls.push(createWall());
+        wallTimer = 0;
+      }
+    }
+
+    // ========== 壁の生成 ==========
+    function createWall() {
+      const margin = 50;
+      const gapX = Math.random() * (canvas.width - baseGapWidth - 2 * margin) + margin;
+      return {
+        y: -CONFIG.wallThickness,
+        gapX: gapX,
+        gapWidth: baseGapWidth,
+        thickness: CONFIG.wallThickness,
+        processed: false,
+        collided: false
+      };
     }
 
     // ========== 衝突判定 ==========
@@ -300,54 +456,6 @@
       );
     }
 
-    // ========== 壁生成 ==========
-    function createWall() {
-      const margin = 50;
-      const gapX = Math.random() * (canvas.width - baseGapWidth - 2*margin) + margin;
-      return {
-        y: -wallThickness,
-        gapX: gapX,
-        gapWidth: baseGapWidth,
-        thickness: wallThickness,
-        processed: false,
-        collided: false
-      };
-    }
-
-    // ========== 壁更新・衝突/ボーナス処理 ==========
-    function updateWalls() {
-      for (let wall of walls) {
-        wall.y += baseWallSpeed;
-
-        // 衝突
-        if (!wall.processed && isBallCollidingWithWall(wall)) {
-          if (!wall.collided) {
-            score -= baseCollisionPenalty;
-            wall.collided = true;
-          }
-          charY += pushForce;
-        }
-
-        // ボーナス判定: ボールを下に抜けた瞬間
-        if (!wall.processed && wall.y > charY && !isBallCollidingWithWall(wall)) {
-          let bonus = Math.round((canvas.height - charY) / 5);
-          score += bonus;
-          addScoreBonus(bonus, charX, charY);
-          wall.processed = true;
-        }
-      }
-
-      // 画面下に消えた壁を削除
-      walls = walls.filter(w => w.y < canvas.height);
-
-      // 定期的に壁生成
-      wallTimer++;
-      if (wallTimer > wallInterval) {
-        walls.push(createWall());
-        wallTimer = 0;
-      }
-    }
-
     // ========== 難易度アップ ==========
     function checkDifficultyUp() {
       if (score >= nextMilestone) {
@@ -356,70 +464,13 @@
           difficultyNotice.style.opacity = '0';
         }, 1500);
 
-        baseWallSpeed += 1;
-        baseGapWidth -= 10;
-        if (baseGapWidth < 20) baseGapWidth = 20;
-        baseCollisionPenalty += 5;
-        nextMilestone += 1000;
+        // 難易度アップ時の各値調整
+        baseWallSpeed += CONFIG.wallSpeedIncrease;
+        baseGapWidth -= CONFIG.gapWidthDecrease;
+        if (baseGapWidth < CONFIG.minGapWidth) baseGapWidth = CONFIG.minGapWidth;
+        baseCollisionPenalty += CONFIG.collisionPenaltyIncrease;
+        nextMilestone += CONFIG.milestoneIncrement;
       }
-    }
-
-    // ========== ボール移動(サブステップ) ==========
-    function updateBall() {
-      if (!gameStarted) return;
-
-      smoothBeta = smoothBeta * (1 - smoothingFactor) + currentBeta * smoothingFactor;
-      smoothGamma = smoothGamma * (1 - smoothingFactor) + currentGamma * smoothingFactor;
-
-      let diffBeta = smoothBeta - baseBeta;
-      let diffGamma = smoothGamma - baseGamma;
-
-      const threshold = 1.0;
-      if (Math.abs(diffBeta) < threshold) diffBeta = 0;
-      if (Math.abs(diffGamma) < threshold) diffGamma = 0;
-
-      const sensitivityX = 0.3;
-      const sensitivityY = 0.15;
-      let deltaX = diffGamma * sensitivityX;
-      let deltaY = diffBeta * sensitivityY;
-
-      const maxDeltaX = 8, maxDeltaY = 5;
-      deltaX = Math.max(Math.min(deltaX, maxDeltaX), -maxDeltaX);
-      deltaY = Math.max(Math.min(deltaY, maxDeltaY), -maxDeltaY);
-
-      const steps = 4;
-      const stepX = deltaX / steps;
-      const stepY = deltaY / steps;
-
-      for (let i = 0; i < steps; i++) {
-        charX += stepX;
-        charY += stepY;
-
-        // 画面端クランプ
-        if (charX < radius) charX = radius;
-        if (charX > canvas.width - radius) charX = canvas.width - radius;
-        if (charY < radius) charY = radius;
-        if (charY > canvas.height - radius) charY = canvas.height - radius;
-
-        // 壁衝突
-        for (let wall of walls) {
-          if (!wall.processed && isBallCollidingWithWall(wall)) {
-            if (!wall.collided) {
-              score -= baseCollisionPenalty;
-              wall.collided = true;
-            }
-            charY += pushForce;
-            if (charY > canvas.height - radius) {
-              charY = canvas.height - radius;
-            }
-          }
-        }
-      }
-    }
-
-    // ========== スコア表示更新 ==========
-    function updateScoreDisplay() {
-      scoreDisplay.textContent = `SCORE: ${score}`;
     }
 
     // ========== ボーナス演出 ==========
@@ -432,6 +483,19 @@
       document.body.appendChild(popup);
 
       setTimeout(() => popup.remove(), 1000);
+    }
+
+    // ========== スコア表示更新 ==========
+    function updateScoreDisplay() {
+      scoreDisplay.textContent = `SCORE: ${score}`;
+    }
+
+    // ========== プログレスバー更新 ==========
+    function updateProgressBar() {
+      const progress = (score % CONFIG.milestoneIncrement) / CONFIG.milestoneIncrement * 100;
+      progressFill.style.width = `${progress}%`;
+      // 常に表示
+      progressBar.style.display = 'block';
     }
 
     // ========== ゲームオーバー判定 ==========
@@ -447,26 +511,21 @@
         ctx.fillStyle = 'rgba(244,67,54,0.2)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.shadowBlur = 0;
+        // ゲームオーバー時は再度「ゲームスタート」ボタンを表示
+        startButton.style.display = "block";
       }
     }
 
-    // ========== 背景エフェクト ==========
+    // ========== 背景エフェクト描画 ==========
     function drawBackgroundEffects() {
-      if (Math.random() < 0.05) {
-        ctx.fillStyle = `rgba(255,255,255,${Math.random()*0.3})`;
+      if (Math.random() < CONFIG.starEffectProbability) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.3})`;
         ctx.fillRect(
-          Math.random()*canvas.width,
-          Math.random()*canvas.height,
-          1.5, 1.5
+          Math.random() * canvas.width,
+          Math.random() * canvas.height,
+          CONFIG.starSize, CONFIG.starSize
         );
       }
-    }
-
-    // ========== プログレスバー更新 ==========
-    function updateProgressBar() {
-      const progress = (score % 1000) / 1000 * 100;
-      progressFill.style.width = `${progress}%`;
-      progressBar.style.display = gameStarted ? 'block' : 'none';
     }
 
     // ========== メイン描画処理 ==========
@@ -474,10 +533,10 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawBackgroundEffects();
 
-      // ネオングラデのボール
+      // 玉の描画（ネオングラデーション）
       const gradient = ctx.createRadialGradient(
         charX, charY, 0,
-        charX, charY, radius*2
+        charX, charY, radius * 2
       );
       gradient.addColorStop(0, 'rgba(76,175,80,1)');
       gradient.addColorStop(1, 'rgba(76,175,80,0.3)');
@@ -490,7 +549,7 @@
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // 壁描画(ネオンレッド)
+      // 壁の描画（ネオンレッド）
       walls.forEach(wall => {
         const wallGradient = ctx.createLinearGradient(0, wall.y, 0, wall.y + wall.thickness);
         wallGradient.addColorStop(0, '#F44336');
@@ -499,9 +558,9 @@
         ctx.fillStyle = wallGradient;
         ctx.shadowColor = '#F44336';
         ctx.shadowBlur = 10;
-        // 左壁
+        // 左側の壁
         ctx.fillRect(0, wall.y, wall.gapX, wall.thickness);
-        // 右壁
+        // 右側の壁
         ctx.fillRect(wall.gapX + wall.gapWidth, wall.y,
           canvas.width - (wall.gapX + wall.gapWidth), wall.thickness);
         ctx.shadowBlur = 0;
@@ -510,25 +569,10 @@
       updateProgressBar();
     }
 
-    // ========== メインループ ==========
-    function loop() {
-      if (!gameOver) {
-        updateBall();
-        updateWalls();
-        checkDifficultyUp();
-        checkGameOver();
-        updateScoreDisplay();
-        draw();
-        animationId = requestAnimationFrame(loop);
-      } else {
-        animationId = null;
-      }
-    }
-
-    // ========== ゲームオーバー表示タップで再スタート ==========
-    gameOverDisplay.addEventListener('click', () => {
-      startButton.click();
-    });
+    // 初期表示時に、resetGame() を呼び出し draw() を１回実行して
+    // 玉とプログレスバー（1000 の倍数メーター）を表示する
+    resetGame();
+    draw();
   </script>
 </body>
 </html>
